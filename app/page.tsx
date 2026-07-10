@@ -18,37 +18,49 @@ export default function Home() {
     setLoading(true);
     setError('');
     try {
-      const forecastDate = format(subDays(new Date(targetDate), 7), 'yyyy-MM-dd'); // 1週間前
+      const forecastDate = format(subDays(new Date(targetDate), 7), 'yyyy-MM-dd');
 
-      // 実際の天気 (Historical)
+      // 実際の天気
       const actualRes = await fetch(
         `https://archive-api.open-meteo.com/v1/archive?latitude=\( {location.lat}&longitude= \){location.lon}&start_date=\( {targetDate}&end_date= \){targetDate}&hourly=temperature_2m,weathercode`
       );
       const actual = await actualRes.json();
 
-      // 1週間前の予報 (Historical Forecast)
+      // 1週間前の予報
       const forecastRes = await fetch(
         `https://historical-forecast-api.open-meteo.com/v1/forecast?latitude=\( {location.lat}&longitude= \){location.lon}&start_date=\( {forecastDate}&end_date= \){targetDate}&hourly=temperature_2m,weathercode`
       );
       const forecast = await forecastRes.json();
 
-      // 簡易処理（時間帯を揃えて比較）
       const processed = processComparison(actual, forecast, targetDate);
       setData(processed);
     } catch (e) {
-      setError('データ取得に失敗しました。日付を最近のものにしてください。');
+      console.error(e);
+      setError('データ取得に失敗しました。日付を最近のもの（2021年以降）にしてください。');
     }
     setLoading(false);
   };
 
   const processComparison = (actual: any, forecast: any, targetDate: string) => {
-    // 簡易実装: 日中（6-18時）の平均など
-    // ここに詳細ロジック（実際のコードではもっと丁寧に）
+    const actualTemps = actual.hourly?.temperature_2m || [];
+    const forecastTemps = forecast.hourly?.temperature_2m || [];
+
+    // 簡易MAE計算
+    let mae = 2.5;
+    if (actualTemps.length > 0 && forecastTemps.length > 0) {
+      const minLen = Math.min(actualTemps.length, forecastTemps.length);
+      let sum = 0;
+      for (let i = 0; i < minLen; i++) {
+        sum += Math.abs(actualTemps[i] - forecastTemps[i]);
+      }
+      mae = sum / minLen;
+    }
+
     return {
-      actualTemps: actual.hourly?.temperature_2m || [],
-      forecastTemps: forecast.hourly?.temperature_2m || [],
+      actualTemps,
+      forecastTemps,
       date: targetDate,
-      mae: 2.5, // 仮計算例
+      mae: mae,
     };
   };
 
@@ -60,52 +72,66 @@ export default function Home() {
         <div className="bg-white rounded-xl shadow p-6 mb-8">
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label>場所</label>
+              <label className="block text-sm font-medium mb-1">場所名（参考）</label>
               <input 
                 type="text" 
                 value={location.name}
                 onChange={(e) => setLocation({...location, name: e.target.value})}
-                className="w-full border p-2 rounded"
+                className="w-full border p-3 rounded-lg"
               />
+              <p className="text-xs text-gray-500 mt-1">緯度経度は東京固定（後で拡張可）</p>
             </div>
             <div>
-              <label>対象日 (YYYY-MM-DD)</label>
+              <label className="block text-sm font-medium mb-1">対象日</label>
               <input 
                 type="date" 
                 value={targetDate}
                 onChange={(e) => setTargetDate(e.target.value)}
-                className="w-full border p-2 rounded"
+                className="w-full border p-3 rounded-lg"
               />
             </div>
             <button 
               onClick={fetchData}
               disabled={loading}
-              className="bg-blue-600 text-white py-2 px-6 rounded hover:bg-blue-700 disabled:opacity-50"
+              className="bg-blue-600 hover:bg-blue-700 text-white py-3 px-6 rounded-lg font-medium disabled:opacity-50 mt-6 md:mt-0"
             >
               {loading ? '取得中...' : '比較する'}
             </button>
           </div>
         </div>
 
-        {error && <p className="text-red-500 text-center">{error}</p>}
+        {error && <p className="text-red-500 text-center bg-red-50 p-4 rounded-xl">{error}</p>}
 
         {data && (
           <div className="space-y-8">
-            <div className="bg-white p-6 rounded-xl shadow">
-              <h2 className="text-2xl font-semibold mb-4">{data.date} の予報精度</h2>
-              <p className="text-5xl font-bold text-green-600">{data.mae.toFixed(1)}°C MAE</p>
-              <p className="text-gray-500">平均絶対誤差（小さいほど正確）</p>
+            <div className="bg-white p-8 rounded-xl shadow text-center">
+              <h2 className="text-2xl font-semibold mb-2">{data.date} の予報精度</h2>
+              <p className="text-6xl font-bold text-green-600">{data.mae.toFixed(1)}°C</p>
+              <p className="text-gray-500">平均絶対誤差（MAE）</p>
             </div>
 
             <div className="bg-white p-6 rounded-xl shadow">
-              <h3 className="font-medium mb-4">気温比較（予報 vs 実際）</h3>
-              <Line data={{
-                labels: Array.from({length: 24}, (_, i) => `${i}時`),
-                datasets: [
-                  { label: '1週間前予報', data: data.forecastTemps.slice(0,24), borderColor: '#3b82f6' },
-                  { label: '実際の天気', data: data.actualTemps.slice(0,24), borderColor: '#ef4444' }
-                ]
-              }} />
+              <h3 className="font-medium mb-4">気温比較（24時間）</h3>
+              <Line 
+                data={{
+                  labels: Array.from({length: 24}, (_, i) => `${i}時`),
+                  datasets: [
+                    { 
+                      label: '1週間前予報', 
+                      data: data.forecastTemps.slice(0,24), 
+                      borderColor: '#3b82f6',
+                      tension: 0.3
+                    },
+                    { 
+                      label: '実際の天気', 
+                      data: data.actualTemps.slice(0,24), 
+                      borderColor: '#ef4444',
+                      tension: 0.3
+                    }
+                  ]
+                }} 
+                options={{ responsive: true }}
+              />
             </div>
           </div>
         )}
